@@ -11,8 +11,11 @@ const showImage = async (al: ALTX | ALIG, name: string) => {
   if (binary.byteLength === 0) return;
   //
   const sp = document.createElement('span');
-  sp.innerText = name;
   sp.style.textAlign = 'left';
+  const a = document.createElement('a');
+  a.textContent = name;
+  a.download = name.replace('.atx', '.png');
+  sp.appendChild(a);
   d?.appendChild(sp);
   //
   const image = new ImageData(binary, al.Width, al.Height);
@@ -21,14 +24,24 @@ const showImage = async (al: ALTX | ALIG, name: string) => {
   c.height = image.height;
   c.getContext('2d')?.putImageData(image, 0, 0);
   d?.appendChild(c);
+
+  c.toBlob(blob => {
+    if (blob) a.href = URL.createObjectURL(blob);
+  });
 };
 
 const showText = async (text: string, name: string) => {
   const d = document.getElementById('d');
   //
   const sp = document.createElement('span');
-  sp.innerText = name;
   sp.style.textAlign = 'left';
+  const a = document.createElement('a');
+  a.textContent = name;
+  a.download = name.replace('.atx', '.txt');
+  a.href = URL.createObjectURL(new Blob([text], {
+    type: "text/plain"
+  }));
+  sp.appendChild(a);
   d?.appendChild(sp);
   //
   const p = document.createElement('pre');
