@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { ALAR, ALIG, ALText, ALTX, parseAL } from './aigis-fuel/AL';
+import { ALAR, ALIG, ALText, ALTX, parseAL, ALContext } from './aigis-fuel/AL';
+
+const props = defineProps(['lz4'])
 
 const showImage = async (al: ALTX | ALIG, name: string) => {
   const d = document.getElementById('d');
@@ -41,6 +43,8 @@ const onFilesInput = async (payload: Event) => {
   if (!(target instanceof HTMLInputElement)) return;
   if (!target.files) return;
 
+  const context: ALContext = { lz4: props.lz4 };
+
   // search file
   for (const file of Array.from(target.files)) {
     console.log(`- ${file.name}`);
@@ -63,9 +67,9 @@ const onFilesInput = async (payload: Event) => {
     }
 
     //
-    const al = await parseAL(file);
+    const al = await parseAL(context, file);
     if (al instanceof ALAR) {
-      for (const alFile of al.GetFiles()) {
+      for (const alFile of al.GetFiles(context)) {
         // if (!alFile.Name.includes("card") && !alFile.Name.includes("Harlem")) continue;
         // if (!alFile.Name.includes("card")) continue;
         // if (!alFile.Name.includes("Harlem")) continue;

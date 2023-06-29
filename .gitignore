@@ -24,3 +24,6 @@ dist-ssr
 *.sw?
 
 _ext
+
+# wasm file
+public/lz4.wasm

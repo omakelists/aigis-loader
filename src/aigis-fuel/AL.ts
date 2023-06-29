@@ -1,8 +1,12 @@
 import { DataViewReader, Origin } from './DataViewReader';
 import { gunzipSync } from 'fflate';
-import lz4 from 'mini-lz4/src/lz4';
+import type { Lz4 } from 'lz4-asm';
 
 const decoder = new TextDecoder();
+
+export type ALContext = {
+  lz4: Lz4
+};
 
 export class AL {
   Buffer: Uint8Array;
@@ -32,10 +36,10 @@ export class ALText extends AL {
 
 export class ALL4 extends AL {
   Dst: Uint8Array;
-  constructor(buffer: Uint8Array) {
+  constructor(context: ALContext, buffer: Uint8Array) {
     super(buffer);
     const jump = buffer.slice(12);
-    this.Dst = lz4.decompress(jump);
+    this.Dst = context.lz4.decompress(jump);
   }
   Package() {
     return this.Buffer;
@@ -288,7 +292,7 @@ export class ALAR extends AL {
   UnknownBytes: Uint8Array;
   DataOffset = 0;
   PayloadDataViewReader: DataViewReader;
-  *GetFiles() {
+  *GetFiles(lz4: ALContext) {
     // FIXME ファイルのオフセットでアクセスしたい
     // for (const offset of this.TocOffsetList) {
     //   const b = new DataViewReader(this.Buffer.slice(offset));
@@ -298,7 +302,7 @@ export class ALAR extends AL {
       const ext = entry.name.split('.').pop() ?? '';
       if (ext[0] === 'a') {
         try {
-          entry.content = parseObject(
+          entry.content = parseObject(lz4,
             this.Buffer.slice(entry.address, entry.address + entry.size),
           );
         } catch (e) {
@@ -933,16 +937,16 @@ const AlTypeMap = new Map<string, string>([
   ['ALLZ', 'AL Compress'],
 ]);
 
-function parseObject(buffer: Uint8Array): AL {
+function parseObject(context: ALContext, buffer: Uint8Array): AL {
   const type = decoder.decode(buffer.slice(0, 4));
   switch (type) {
     case 'ALLZ': {
       const lz = new ALLZ(buffer);
-      return parseObject(lz.Dst);
+      return parseObject(context, lz.Dst);
     }
     case 'ALL4': {
-      const l4 = new ALL4(buffer);
-      return parseObject(l4.Dst);
+      const l4 = new ALL4(context, buffer);
+      return parseObject(context, l4.Dst);
     }
     case 'ALTB':
       return new ALTB(buffer);
@@ -966,11 +970,11 @@ function parseObject(buffer: Uint8Array): AL {
   }
 }
 
-export async function parseAL(blob: Blob) {
+export async function parseAL(context: ALContext, blob: Blob) {
   const buffer = new Uint8Array(await blob.arrayBuffer());
   // gzip
   if (buffer.at(0) === 0x1f && buffer.at(1) === 0x8b) {
-    return parseObject(gunzipSync(buffer));
+    return parseObject(context, gunzipSync(buffer));
   }
-  return parseObject(buffer);
+  return parseObject(context, buffer);
 }

@@ -11,7 +11,7 @@
   "dependencies": {
     "fflate": "^0.7.3",
     "fzstd": "^0.0.4",
-    "mini-lz4": "^3.0.0",
+    "lz4-asm": "^0.4.2",
     "vue": "^3.2.37"
   },
   "devDependencies": {
@@ -21,6 +21,7 @@
     "eslint": "^8.22.0",
     "eslint-plugin-vue": "^9.3.0",
     "prettier": "^2.7.1",
+    "rollup-plugin-copy": "^3.4.0",
     "typescript": "^4.7.4",
     "vite": "^3.0.7",
     "vue-tsc": "^0.40.1"
