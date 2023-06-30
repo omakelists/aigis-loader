@@ -292,7 +292,7 @@ export class ALAR extends AL {
   UnknownBytes: Uint8Array;
   DataOffset = 0;
   PayloadDataViewReader: DataViewReader;
-  *GetFiles(lz4: ALContext) {
+  *GetFiles(context: ALContext) {
     // FIXME ファイルのオフセットでアクセスしたい
     // for (const offset of this.TocOffsetList) {
     //   const b = new DataViewReader(this.Buffer.slice(offset));
@@ -302,7 +302,7 @@ export class ALAR extends AL {
       const ext = entry.name.split('.').pop() ?? '';
       if (ext[0] === 'a') {
         try {
-          entry.content = parseObject(lz4,
+          entry.content = parseObject(context,
             this.Buffer.slice(entry.address, entry.address + entry.size),
           );
         } catch (e) {
