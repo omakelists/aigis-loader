@@ -12,7 +12,7 @@
     "fflate": "^0.7.3",
     "fzstd": "^0.0.4",
     "lz4-asm": "^0.4.2",
-    "vue": "^3.2.37"
+    "vue": "^3.3.4"
   },
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "^5.33.1",
