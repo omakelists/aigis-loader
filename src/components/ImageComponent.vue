@@ -93,7 +93,7 @@ onMounted(() => {
   <div>
     <div><a ref="anchorRef">{{name}}</a></div>
     <div><canvas ref="canvasRef" /></div>
-    <div v-if="data instanceof ALTX">
+    <div v-if="data instanceof ALTX && Object.keys(data.Sprites).length >= 2">
       <div>
         <DrumSelector :array="Object.keys(data.Sprites)" @update="item => spriteKey = item" />
       </div>
