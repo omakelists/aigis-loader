@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import {onMounted, PropType, ref, watch} from "vue";
+import {nextTick, onMounted, PropType, ref, watch} from "vue";
 
 const props = defineProps({
   width: Number,
@@ -20,11 +20,14 @@ watch(() => props.data, () => {
 function drawData() {
   const ctx = canvasRef?.value?.getContext('2d');
   if (ctx) {
-    if (props.data instanceof ImageData) {
-      ctx.putImageData(props.data, 0, 0);
-    } else if (props.data instanceof ImageBitmap) {
-      ctx.drawImage(props.data, 0, 0);
-    }
+    // Wait for the Canvas to be resized
+    nextTick(() => {
+      if (props.data instanceof ImageData) {
+        ctx.putImageData(props.data, 0, 0);
+      } else if (props.data instanceof ImageBitmap) {
+        ctx.drawImage(props.data, 0, 0);
+      }
+    });
   }
 }
 
