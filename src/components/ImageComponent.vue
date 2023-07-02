@@ -2,6 +2,7 @@
 import {onMounted, PropType, ref, toRefs, watch} from "vue";
 import {ALIG, ALTX, AltxFrame} from "../aigis-fuel/AL";
 import CanvasComponent from "./CanvasComponent.vue";
+import DrumSelector from "./ArraySelector.vue";
 
 const props = defineProps({
   name: String,
@@ -13,51 +14,12 @@ const { name, data } = toRefs(props);
 const imageData = ref<ImageData | ImageBitmap>();
 
 const spriteKey = ref<string>();
-const spriteIndex = ref<number>();
-const spriteSize = ref<number>();
-const spriteLabel = ref<string>();
 
 const frameName = ref<string>();
 const frameTable = ref<AltxFrame[]>([]);
 
 const anchorRef = ref<HTMLAnchorElement>();
 const canvasRef = ref<HTMLCanvasElement>();
-
-watch([spriteKey, spriteIndex, spriteSize], ([spriteKey, spriteIndex, spriteSize]) => {
-  spriteLabel.value = `${spriteKey} [${(spriteIndex||0)+1}/${spriteSize}]`;
-});
-
-function previous() {
-  if (data?.value && data.value instanceof ALTX) {
-    const keys = Object.keys(data.value.Sprites);
-    if (spriteKey.value) {
-      const index = keys.indexOf(spriteKey.value)
-      if (index > 0) {
-        spriteIndex.value = index - 1;
-        spriteKey.value = keys[index - 1];
-      } else {
-        spriteIndex.value = keys.length - 1;
-        spriteKey.value = keys[keys.length - 1];
-      }
-    }
-  }
-}
-
-function next() {
-  if (data?.value && data.value instanceof ALTX) {
-    const keys = Object.keys(data.value.Sprites);
-    if (spriteKey.value) {
-      const index = keys.indexOf(spriteKey.value)
-      if (index + 1 < keys.length) {
-        spriteIndex.value = index + 1;
-        spriteKey.value = keys[index + 1];
-      } else {
-        spriteIndex.value = 0;
-        spriteKey.value = keys[0];
-      }
-    }
-  }
-}
 
 function cropImage(sprite: AltxFrame) {
   const ctx = canvasRef?.value?.getContext('2d');
@@ -70,9 +32,6 @@ function cropImage(sprite: AltxFrame) {
 function updateFrame() {
   if (data?.value instanceof ALTX && spriteKey.value) {
     const sprites = data.value.Sprites[spriteKey.value];
-    const keys = Object.keys(data.value.Sprites);
-    spriteIndex.value = keys.indexOf(spriteKey.value);
-    spriteSize.value = keys.length;
     frameName.value = sprites.name;
     frameTable.value = sprites;
   }
@@ -122,8 +81,9 @@ onMounted(() => {
 
   if (data?.value && data.value instanceof ALTX) {
     const keys = Object.keys(data.value.Sprites);
-    if (!spriteKey.value && keys.length > 0) {
+    if (keys.length > 0) {
       spriteKey.value = keys[0];
+      updateFrame();
     }
   }
 });
@@ -135,9 +95,7 @@ onMounted(() => {
     <div><canvas ref="canvasRef" /></div>
     <div v-if="data instanceof ALTX">
       <div>
-        <button @click="previous">-</button>
-        <input v-model="spriteLabel" style="text-align: center;" readonly>
-        <button @click="next">+</button>
+        <DrumSelector :array="Object.keys(data.Sprites)" @update="item => spriteKey = item" />
       </div>
       <span>Frame name: [{{frameName}}]</span>
       <div>
