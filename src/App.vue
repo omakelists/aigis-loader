@@ -52,7 +52,7 @@ const onFilesInput = async (payload: Event) => {
 
   // search file
   for (const file of Array.from(target.files)) {
-    console.log(`- ${file.name}`);
+    console.log(`Input file: ${file.name}`);
     // PNG
     if ((await file.slice(0, 4).text()) === '�PNG') {
       const bitmap = await createImageBitmap(file);
@@ -67,7 +67,7 @@ const onFilesInput = async (payload: Event) => {
     //
     const al = await parseAL(context, file);
     if (al instanceof ALAR) {
-      for (const alFile of al.GetFiles(context)) {
+      for (const alFile of al.Files) {
         // if (!alFile.Name.includes("card") && !alFile.Name.includes("Harlem")) continue;
         // if (!alFile.Name.includes("card")) continue;
         // if (!alFile.Name.includes("Harlem")) continue;

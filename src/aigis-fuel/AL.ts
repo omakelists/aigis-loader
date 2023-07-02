@@ -9,55 +9,76 @@ export type ALContext = {
 };
 
 export class AL {
-  Buffer: Uint8Array;
   Head: string;
-  [k: string]: unknown;
-  constructor(buffer: Uint8Array) {
-    this.Buffer = buffer;
-    this.Head = decoder.decode(buffer.slice(0, 4));
-    if (this.Head && !(this instanceof ALText)) {
-      console.log(`  - ${this.Head}`);
-    }
+  constructor(head: string) {
+    this.Head = head;
   }
 }
 
 export class DefaultAL extends AL {
-  constructor(buffer: Uint8Array) {
-    super(buffer);
+  constructor() {
+    super('DefaultAL');
+  }
+  static parse(context: ALContext, buffer: Uint8Array, level: number): DefaultAL {
+    const head = decoder.decode(buffer.slice(0, 4));
+    console.log(`${"  ".repeat(level)}- ${head}`);
+    return new DefaultAL();
   }
 }
 export class ALText extends AL {
   Text = '';
-  constructor(buffer: Uint8Array) {
-    super(buffer);
-    this.Text = decoder.decode(buffer);
+  constructor(text: string) {
+    super("ALText");
+    this.Text = text;
+  }
+  static parse(context: ALContext, buffer: Uint8Array, _level: number): ALText {
+    const text = decoder.decode(buffer);
+    return new ALText(text);
   }
 }
 
 export class ALL4 extends AL {
   Dst: Uint8Array;
-  constructor(context: ALContext, buffer: Uint8Array) {
-    super(buffer);
-    const jump = buffer.slice(12);
-    this.Dst = context.lz4.decompress(jump);
+  constructor(dst: Uint8Array) {
+    super('ALL4');
+    this.Dst = dst;
   }
-  Package() {
-    return this.Buffer;
+  static parse(context: ALContext, buffer: Uint8Array, level: number): ALL4 {
+    console.log(`${"  ".repeat(level)}- ALL4 (AL LZ4 Compress)`);
+    const head = decoder.decode(buffer.slice(0, 4));
+    if (head !== 'ALL4') {
+      throw new Error(`Block signature is not as expected: ${head} != ALL4`);
+    }
+    const jump = buffer.slice(12);
+    const uncompress = context.lz4.decompress(jump);
+    return new ALL4(uncompress);
   }
 }
 
 export class ALLZ extends AL {
-  Vers: number;
-  MinBitsLength: number;
-  MinBitsOffset: number;
-  MinBitsLiteral: number;
-  DstSize: number;
   Dst: Uint8Array;
-  Size: 0;
-  constructor(buffer: Uint8Array) {
-    super(buffer);
-    this.Buffer = buffer;
+  constructor(dst: Uint8Array) {
+    super('ALLZ');
+    this.Dst = dst;
+  }
+
+  static parse(context: ALContext, buffer: Uint8Array, level: number): ALLZ {
+    console.log(`${"  ".repeat(level)}- ALLZ (AL LZMA Compress)`);
     const br = new DataViewReader(buffer);
+
+    const head = br.ReadString(4);
+    if (head !== 'ALLZ') {
+      throw new Error(`Block signature is not as expected: ${head} != ALLZ`);
+    }
+
+    const _vers = br.ReadByte();
+    const minBitsLength = br.ReadByte();
+    const minBitsOffset = br.ReadByte();
+    const minBitsLiteral = br.ReadByte();
+    const dstSize = br.ReadDword();
+    const dst = new Uint8Array(dstSize);
+    const _size = 0;
+    let dstOffset = 0;
 
     const readControl = (minBits: number) => {
       const u = br.ReadUnary();
@@ -69,35 +90,25 @@ export class ALLZ extends AL {
       }
     };
 
-    const readControlLength = () => 3 + readControl(this.MinBitsLength);
+    const readControlLength = () => 3 + readControl(minBitsLength);
 
-    const readControlOffset = () => -1 - readControl(this.MinBitsOffset);
+    const readControlOffset = () => -1 - readControl(minBitsOffset);
 
-    const readControlLiteral = () => 1 + readControl(this.MinBitsLiteral);
+    const readControlLiteral = () => 1 + readControl(minBitsLiteral);
 
     const copyWord = (offset: number, length: number) => {
       let trueOffset = offset;
       for (let i = 0; i < length; i++) {
         if (offset < 0) trueOffset = dstOffset + offset;
-        this.Dst[dstOffset] = this.Dst[trueOffset];
+        dst[dstOffset] = dst[trueOffset];
         dstOffset++;
       }
     };
 
     const copyLiteral = (control: number) => {
-      br.Copy(new Uint8Array(this.Dst.buffer), dstOffset, control);
+      br.Copy(new Uint8Array(dst.buffer), dstOffset, control);
       dstOffset += control;
     };
-
-    this.Head = br.ReadString(4);
-    this.Vers = br.ReadByte();
-    this.MinBitsLength = br.ReadByte();
-    this.MinBitsOffset = br.ReadByte();
-    this.MinBitsLiteral = br.ReadByte();
-    this.DstSize = br.ReadDword();
-    this.Dst = new Uint8Array(this.DstSize);
-    this.Size = 0;
-    let dstOffset = 0;
 
     copyLiteral(readControlLiteral());
     let wordOffset = readControlOffset();
@@ -107,13 +118,13 @@ export class ALLZ extends AL {
     let finishFlag = 'overflow';
 
     while (!br.Overflow) {
-      if (dstOffset + wordLength >= this.DstSize) {
+      if (dstOffset + wordLength >= dstSize) {
         finishFlag = 'word';
         break;
       }
       if (br.ReadBit() === 0) {
         literalLength = readControlLiteral();
-        if (dstOffset + wordLength + literalLength >= this.DstSize) {
+        if (dstOffset + wordLength + literalLength >= dstSize) {
           finishFlag = 'literal';
           break;
         }
@@ -138,31 +149,29 @@ export class ALLZ extends AL {
       case 'overflow':
         throw Error('Overflow in ALLZ');
     }
-  }
-  Package() {
-    return this.Buffer;
+
+    return new ALLZ(dst);
   }
 }
 
 export class ALRD extends AL {
-  Head: string;
-  Vers: number;
-  Count: number;
-  Size: number;
-  Headers = new Array<AlrdHeader>();
-  Buffer: Uint8Array;
-  constructor(buffer: Uint8Array) {
-    super(buffer);
-    this.Buffer = buffer;
+  Headers: Array<AlrdHeader>;
+  constructor(headers: Array<AlrdHeader>) {
+    super('ALRD');
+    this.Headers = headers;
+  }
+  static parse(context: ALContext, buffer: Uint8Array, level: number): ALRD {
+    console.log(`${"  ".repeat(level)}- ALRD (AL Record Prop)`);
     const br = new DataViewReader(buffer);
-    this.Head = br.ReadString(4);
-    if (this.Head !== 'ALRD') {
-      throw Error('Not a ALRD');
+    const head = br.ReadString(4);
+    if (head !== 'ALRD') {
+      throw new Error(`Block signature is not as expected: ${head} != ALRD`);
     }
-    this.Vers = br.ReadWord();
-    this.Count = br.ReadWord();
-    this.Size = br.ReadWord();
-    for (let i = 0; i < this.Count; i++) {
+    const _vers = br.ReadWord();
+    const count = br.ReadWord();
+    const _size = br.ReadWord();
+    const headers = new Array<AlrdHeader>();
+    for (let i = 0; i < count; i++) {
       const header = {} as AlrdHeader;
       header.offset = br.ReadWord();
       header.type = br.ReadByte();
@@ -174,8 +183,9 @@ export class ALRD extends AL {
       br.Align(4);
       br.Seek(emptyLength, Origin.Current);
       br.Align(4);
-      this.Headers.push(header);
+      headers.push(header);
     }
+    return new ALRD(headers);
   }
 }
 export type AlrdHeader = {
@@ -186,69 +196,69 @@ export type AlrdHeader = {
 };
 
 export class ALTB extends AL {
-  Vers: number;
-  Form: number;
-  Count: number;
-  Unknown1: number;
-  TableEntry: number;
-  NameStartAddressOffset?: number;
-  NameStartAddress?: number;
-  UnknownNames?: number;
-  NameLength?: number;
-  Name?: string;
-  Size: number;
-  StringFieldSizePosition = 0;
-  StringFieldSize = 0;
-  StringFieldEntry = 0;
-  Label?: string;
-  StringField: { [k: string]: unknown } = {};
-  StringOffsetList = new Array<unknown>();
-  Headers = new Array<AlrdHeader>();
-  Contents = new Array<unknown>();
-  constructor(buffer: Uint8Array) {
-    super(buffer);
-    this.Buffer = buffer;
+  Label: string | undefined;
+  Name: string | undefined;
+  Headers: Array<AlrdHeader>;
+  Contents: Array<{ [k: string]: number | string }>;
+  constructor(label: string | undefined, name: string | undefined, headers: Array<AlrdHeader>, contents: Array<{ [k: string]: number | string }>) {
+    super('ALTB');
+    this.Label = label;
+    this.Name = name;
+    this.Headers = headers;
+    this.Contents = contents;
+  }
+  static parse(context: ALContext, buffer: Uint8Array, level: number): ALTB {
+    console.log(`${"  ".repeat(level)}- ALTB (AL Table)`);
     const br = new DataViewReader(buffer);
-    this.Head = br.ReadString(4);
-    this.Vers = br.ReadByte();
-    this.Form = br.ReadByte();
-    this.Count = br.ReadWord();
-    this.Unknown1 = br.ReadWord();
-    this.TableEntry = br.ReadWord();
-    this.Size = br.ReadDword();
-    if (this.Form === 0x14 || this.Form === 0x1e || this.Form === 0x04) {
-      this.StringFieldSizePosition = br.Position;
-      this.StringFieldSize = br.ReadDword();
-      this.StringFieldEntry = br.ReadDword();
-      this.StringField = {};
-      this.StringOffsetList = [];
+    const head = br.ReadString(4);
+    if (head !== 'ALTB') {
+      throw new Error(`Block signature is not as expected: ${head} != ALTB`);
+    }
+
+    const _vers = br.ReadByte();
+    const form = br.ReadByte();
+    const count = br.ReadWord();
+    const _unknown1 = br.ReadWord();
+    const tableEntry = br.ReadWord();
+    const size = br.ReadDword();
+
+    let name: string | undefined;
+    const stringField: {[key: number]: string} = {};
+    const stringOffsetList: number[] = [];
+    let _nameStartAddressOffset: number | undefined;
+    let nameStartAddress: number | undefined;
+    let label: string | undefined;
+    const contents: { [k: string]: number | string }[] = new Array<{ [k: string]: number | string }>();
+    if (form === 0x14 || form === 0x1e || form === 0x04) {
+      const _stringFieldSizePosition = br.Position;
+      const stringFieldSize = br.ReadDword();
+      const stringFieldEntry = br.ReadDword();
 
       const nowPosition = br.Position;
-      br.Seek(this.StringFieldEntry, Origin.Begin);
-      while (br.Position < this.StringFieldEntry + this.StringFieldSize) {
-        const offset = br.Position - this.StringFieldEntry;
+      br.Seek(stringFieldEntry, Origin.Begin);
+      while (br.Position < stringFieldEntry + stringFieldSize) {
+        const offset = br.Position - stringFieldEntry;
         const s = br.ReadString();
-        this.StringField[offset] = s;
-        this.StringOffsetList.push(offset);
+        stringField[offset] = s;
+        stringOffsetList.push(offset);
       }
       br.Seek(nowPosition, Origin.Begin);
     }
-    if (this.Form === 0x1e) {
-      this.NameStartAddressOffset = br.Position;
-      this.NameStartAddress = br.ReadDword();
+    if (form === 0x1e) {
+      _nameStartAddressOffset = br.Position;
+      nameStartAddress = br.ReadDword();
     }
-    if (this.Form !== 0x04) {
-      this.Label = br.ReadString(4);
+    if (form !== 0x04) {
+      label = br.ReadString(4);
     }
-    const alrdBuffer = br.ReadBytes(this.TableEntry - br.Position);
-    br.Seek(this.TableEntry, Origin.Begin);
-    const alrd = new ALRD(alrdBuffer);
-    this.Headers = alrd.Headers;
-    for (let i = 0; i < this.Count; i++) {
-      br.Seek(this.TableEntry + this.Size * i, Origin.Begin);
-      const row: { [k: string]: unknown } = {};
+    const alrdBuffer = br.ReadBytes(tableEntry - br.Position);
+    br.Seek(tableEntry, Origin.Begin);
+    const alrd = ALRD.parse(context, alrdBuffer, level + 1);
+    for (let i = 0; i < count; i++) {
+      br.Seek(tableEntry + size * i, Origin.Begin);
+      const row: { [k: string]: number | string } = {};
       for (let j = 0; j < alrd.Headers.length; j++) {
-        const header = this.Headers[j];
+        const header = alrd.Headers[j];
         const offset = br.Position;
         const dv = new DataView(buffer.buffer);
         switch (header.type) {
@@ -262,104 +272,114 @@ export class ALTB extends AL {
             row[header.nameEN] = dv.getUint8(offset + header.offset);
             break;
           case 0x20:
-            {
-              const stringOffset = dv.getUint32(offset + header.offset, true);
-              row[header.nameEN] = this.StringField[stringOffset];
-            }
+          {
+            const stringOffset = dv.getUint32(offset + header.offset, true);
+            row[header.nameEN] = stringField[stringOffset];
+          }
             break;
         }
       }
-      this.Contents.push(row);
+      contents.push(row);
     }
-    if (this.NameStartAddress !== undefined) {
-      br.Seek(this.NameStartAddress, Origin.Begin);
-      this.UnknownNames = br.ReadDword();
-      this.NameLength = br.ReadByte();
-      this.Name = br.ReadString(this.NameLength);
+    if (nameStartAddress !== undefined) {
+      br.Seek(nameStartAddress, Origin.Begin);
+      const _unknownNames = br.ReadDword();
+      const nameLength = br.ReadByte();
+      name = br.ReadString(nameLength);
     }
+    return new ALTB(label, name, alrd.Headers, contents);
   }
 }
 
 export class ALAR extends AL {
-  Files = new Array<AlarEntry>();
-  TocOffsetList = new Array<number>();
-  Vers: number;
-  Unknown: number;
-  Count: number;
-  DataOffsetByData = 0;
-  Unknown1 = 0;
-  Unknown2 = 0;
-  UnknownBytes: Uint8Array;
-  DataOffset = 0;
-  PayloadDataViewReader: DataViewReader;
-  *GetFiles(context: ALContext) {
+  Files: AlarEntry[];
+  static *parseFiles(context: ALContext, buffer: Uint8Array, level: number, vers: number, count: number, reader: DataViewReader) {
     // FIXME ファイルのオフセットでアクセスしたい
     // for (const offset of this.TocOffsetList) {
     //   const b = new DataViewReader(this.Buffer.slice(offset));
     //   const entry = this.parseTocEntry(b);
-    for (let i = 0; i < this.Count; i++) {
-      const entry = this.parseTocEntry(this.PayloadDataViewReader);
+    for (let i = 0; i < count; i++) {
+      const entry = this.parseTocEntry(vers, reader, level);
+      console.log(`${"  ".repeat(level)}  Entry name: ${entry.name}`);
       const ext = entry.name.split('.').pop() ?? '';
       if (ext[0] === 'a') {
         try {
           entry.content = parseObject(context,
-            this.Buffer.slice(entry.address, entry.address + entry.size),
+            buffer.slice(entry.address, entry.address + entry.size),
+            level + 1
           );
         } catch (e) {
           console.error(e);
-          entry.content = new DefaultAL(
-            this.Buffer.slice(entry.address, entry.address + entry.size),
+          entry.content = DefaultAL.parse(
+            context,
+            buffer.slice(entry.address, entry.address + entry.size),
+            level + 1
           );
         }
       } else if (ext === 'txt') {
-        entry.content = new ALText(
-          this.Buffer.slice(entry.address, entry.address + entry.size),
+        entry.content = ALText.parse(
+          context,
+          buffer.slice(entry.address, entry.address + entry.size),
+          level + 1
         );
       } else {
         console.warn(`Unknown Entry ${entry.name}`);
-        entry.content = new DefaultAL(
-          this.Buffer.slice(entry.address, entry.address + entry.size),
+        entry.content = DefaultAL.parse(
+          context,
+          buffer.slice(entry.address, entry.address + entry.size),
+          level + 1
         );
       }
       yield entry;
     }
   }
-  constructor(buffer: Uint8Array) {
-    super(buffer);
-    this.Buffer = buffer;
+  constructor(files: AlarEntry[]) {
+    super('ALAR');
+    this.Files = files;
+  }
+  static parse(context: ALContext, buffer: Uint8Array, level: number): ALAR {
+    console.log(`${"  ".repeat(level)}- ALAR (AL Archive)`);
     const br = new DataViewReader(buffer);
-    this.Head = br.ReadString(4);
-    this.Files = [];
-    this.TocOffsetList = [];
-    this.Vers = br.ReadByte();
-    this.Unknown = br.ReadByte();
+    const head = br.ReadString(4);
+    if (head !== 'ALAR') {
+      throw new Error(`Block signature is not as expected: ${head} != ALAR`);
+    }
 
-    switch (this.Vers) {
-      case 2:
-        this.Count = br.ReadWord();
-        this.UnknownBytes = br.ReadBytes(8);
+    const _files = [];
+    const tocOffsetList = [];
+    const vers = br.ReadByte();
+    const _unknown = br.ReadByte();
+    let count: number;
+
+    switch (vers) {
+      case 2: {
+        count = br.ReadWord();
+        const _unknownBytes = br.ReadBytes(8);
         break;
-      case 3:
-        this.Count = br.ReadWord();
-        this.Unknown1 = br.ReadWord();
-        this.Unknown2 = br.ReadWord();
-        this.UnknownBytes = br.ReadBytes(4);
-        this.DataOffset = br.ReadWord();
-        for (let i = 0; i < this.Count; i++) {
-          this.TocOffsetList.push(br.ReadWord());
+      }
+      case 3: {
+        count = br.ReadWord();
+        const _unknown1 = br.ReadWord();
+        const _unknown2 = br.ReadWord();
+        const _unknownBytes = br.ReadBytes(4);
+        const _dataOffset = br.ReadWord();
+        for (let i = 0; i < count; i++) {
+          tocOffsetList.push(br.ReadWord());
         }
         break;
+      }
       default:
         throw Error('ALAR VERSION ERROR');
     }
     //
     br.Align(4);
-    this.PayloadDataViewReader = new DataViewReader(buffer.slice(br.Position));
+    const PayloadDataViewReader = new DataViewReader(buffer.slice(br.Position));
+    return new ALAR([...this.parseFiles(context, buffer, level, vers, count, PayloadDataViewReader)]);
   }
 
-  private parseTocEntry(br: DataViewReader) {
+  private static parseTocEntry(vers: number, br: DataViewReader, _level: number) {
     const entry = {} as AlarEntry;
-    switch (this.Vers) {
+    switch (vers) {
       case 2:
         {
           entry.index = br.ReadWord();
@@ -417,43 +437,55 @@ export type AltxFrameTable = Array<AltxFrame> & {
 };
 
 export class ALTX extends AL {
-  Vers: number;
-  Form: number;
-  Count: number;
-  Sprites: { [key: number]: AltxFrameTable } = {};
-  Image = new Uint8Array(0);
+  Width: number;
+  Height: number;
+  Sprites: { [key: string]: AltxFrameTable };
+  Image: Uint8Array;
   FakeImage?: string;
-  Width = 0;
-  Height = 0;
-  Unknown1?: number;
-  Unknown2?: number;
-  constructor(buffer: Uint8Array) {
-    super(buffer);
+  constructor(width: number, height: number, sprites: { [p: number]: AltxFrameTable }, image: Uint8Array, fakeImage: string | undefined) {
+    super('ALTX');
+    this.Width = width;
+    this.Height = height;
+    this.Sprites = sprites;
+    this.Image = image;
+    this.FakeImage = fakeImage;
+  }
+  static parse(context: ALContext, buffer: Uint8Array, level: number): ALTX {
+    console.log(`${"  ".repeat(level)}- ALTX (AL Texture)`);
     const br = new DataViewReader(buffer);
     const startOffset = br.Position;
-    this.Head = br.ReadString(4);
-    this.Vers = br.ReadByte();
-    this.Form = br.ReadByte();
-    this.Count = br.ReadWord();
+    const head = br.ReadString(4);
+    if (head !== 'ALTX') {
+      throw new Error(`Block signature is not as expected: ${head} != ALTX`);
+    }
+
+    const _vers = br.ReadByte();
+    const form = br.ReadByte();
+    const count = br.ReadWord();
     const aligOffset = startOffset + br.ReadDword();
-    if (this.Form === 0) {
+    const sprites: { [key: number]: AltxFrameTable } = {};
+    let image = new Uint8Array(0);
+    let fakeImage: string | undefined;
+    let width = 0;
+    let height = 0;
+    if (form === 0) {
       const blockStart = [];
-      for (let i = 0; i < this.Count; ++i) {
+      for (let i = 0; i < count; ++i) {
         blockStart.push(startOffset + br.ReadWord());
       }
       br.Align(4);
-      for (let i = 0; i < this.Count; ++i) {
+      for (let i = 0; i < count; ++i) {
         let frameName = '';
         if (
-          br.Position === blockStart[i] - 0x20 ||
-          (i > 0 && br.Position === blockStart[0] - 0x20 + blockStart[i])
+            br.Position === blockStart[i] - 0x20 ||
+            (i > 0 && br.Position === blockStart[0] - 0x20 + blockStart[i])
         ) {
           frameName = br.ReadString(0x20);
         }
         const index = br.ReadWord();
-        this.Unknown1 = br.ReadWord();
+        const _unknown1 = br.ReadWord();
         const frames = br.ReadWord();
-        this.Unknown2 = br.ReadWord();
+        const _unknown2 = br.ReadWord();
         const frameTable: AltxFrameTable = [];
         frameTable.name = frameName;
         for (let j = 0; j < frames; ++j) {
@@ -471,21 +503,22 @@ export class ALTX extends AL {
           frameTable[j].OriginX = br.ReadShort();
           frameTable[j].OriginY = br.ReadShort();
         }
-        this.Sprites[index] = frameTable;
+        sprites[index] = frameTable;
       }
     }
     br.Seek(aligOffset, Origin.Begin);
-    if (this.Form === 0) {
+    if (form === 0) {
       const aligBuffer = br.ReadBytes(br.Length - br.Position);
-      const alig = new ALIG(aligBuffer);
-      this.Image = alig.Image;
-      this.Width = alig.Width;
-      this.Height = alig.Height;
-    } else if (this.Form === 0x0e) {
-      this.Width = br.ReadWord();
-      this.Height = br.ReadWord();
-      this.FakeImage = br.ReadString(0x100);
+      const alig = ALIG.parse(context, aligBuffer, level + 1);
+      image = alig.Image;
+      width = alig.Width;
+      height = alig.Height;
+    } else if (form === 0x0e) {
+      width = br.ReadWord();
+      height = br.ReadWord();
+      fakeImage = br.ReadString(0x100);
     }
+    return new ALTX(width, height, sprites, image, fakeImage);
   }
 }
 
@@ -502,70 +535,74 @@ export class ChannelExtractor {
 }
 
 export class ALIG extends AL {
-  Vers: number;
-  Form: string;
-  PaletteForm: string;
-  Count = 0;
   Width: number;
   Height: number;
-  Size: number;
-  Palette = new Array<Uint8Array>();
-  PaletteSize = 0;
   Image: Uint8Array;
-  constructor(buffer: Uint8Array) {
-    super(buffer);
-    this.Buffer = buffer;
+  constructor(width: number, height: number, image: Uint8Array) {
+    super('ALIG');
+    this.Width = width;
+    this.Height = height;
+    this.Image = image;
+  }
+  static parse(context: ALContext, buffer: Uint8Array, level: number): ALIG {
+    console.log(`${"  ".repeat(level)}- ALIG (AL Image)`);
     const br = new DataViewReader(buffer);
     const convert = (x: number) => Math.floor(x / 8) * 64 + (x % 8) * 9;
-    this.Head = br.ReadString(4);
-    this.Vers = br.ReadByte();
+    const head = br.ReadString(4);
+    if (head !== 'ALIG') {
+      throw new Error(`Block signature is not as expected: ${head} != ALIG`);
+    }
+
+    const _vers = br.ReadByte();
     const _unknown1 = br.ReadByte();
-    this.PaletteSize = br.ReadWord();
-    this.Form = br.ReadString(4);
-    this.PaletteForm = br.ReadString(4);
-    this.Width = br.ReadDword();
-    this.Height = br.ReadDword();
+    const paletteSize = br.ReadWord();
+    const form = br.ReadString(4);
+    const paletteForm = br.ReadString(4);
+    const width = br.ReadDword();
+    const height = br.ReadDword();
     const _unknown2 = br.ReadWord();
     const _unknown3 = br.ReadWord();
     const _unknown4 = br.ReadByte();
     const _unknown5 = br.ReadByte();
     const _unknown6 = br.ReadWord();
-    console.log(`   - ${this.Form} > ${this.PaletteForm}`);
+    const palette = new Array<Uint8Array>();
 
-    this.Size = this.Width * this.Height;
-    this.Image = new Uint8Array(4 * this.Size);
+    console.log(`${"  ".repeat(level)}  [${form} > ${paletteForm}]`);
 
-    if (this.Form.startsWith('PAL')) {
-      for (let i = 0; i < this.PaletteSize; i++)
-        this.Palette[i] = br.ReadBytes(4);
+    const size = width * height;
+    let image = new Uint8Array(4 * size);
+
+    if (form.startsWith('PAL')) {
+      for (let i = 0; i < paletteSize; i++)
+        palette[i] = br.ReadBytes(4);
     }
 
-    switch (this.Form) {
+    switch (form) {
       case 'PAL8':
-        for (let i = 0; i < this.Size; i++) {
-          this.Image.set(this.Palette[br.ReadByte()], i * 4);
+        for (let i = 0; i < size; i++) {
+          image.set(palette[br.ReadByte()], i * 4);
         }
         break;
       case 'PAL6':
-        for (let i = 0; i < this.Size; i++) {
-          this.Image.set(this.Palette[br.ReadWord()], i * 4);
+        for (let i = 0; i < size; i++) {
+          image.set(palette[br.ReadWord()], i * 4);
         }
         break;
       case 'PAL4':
-        for (let i = 0; i < Math.floor(this.Size / 2); i++) {
+        for (let i = 0; i < Math.floor(size / 2); i++) {
           const x = br.ReadByte();
-          this.Image.set(this.Palette[x >> 4], i * 8);
-          this.Image.set(this.Palette[x & 0xf], i * 8 + 4);
+          image.set(palette[x >> 4], i * 8);
+          image.set(palette[x & 0xf], i * 8 + 4);
         }
         break;
       case 'PAL1':
         // FIXME Not sure if the process is correct.
-        for (let i = 0; i < this.Size; i++) {
-          this.Image.set(this.Palette[br.ReadBit()], i * 4);
+        for (let i = 0; i < size; i++) {
+          image.set(palette[br.ReadBit()], i * 4);
         }
         break;
       case 'ABG5':
-        for (let i = 0; i < this.Size; ++i) {
+        for (let i = 0; i < size; ++i) {
           const pix = br.ReadWord();
           const extractor = new ChannelExtractor(pix);
           let a = extractor.extract(2);
@@ -576,11 +613,11 @@ export class ALIG extends AL {
           g = convert(g);
           b = convert(b);
           a = Math.floor(a * (255 / 1) + 0.5);
-          this.Image.set([r, g, b, a], i * 4);
+          image.set([r, g, b, a], i * 4);
         }
         break;
       case 'BGR5':
-        for (let i = 0; i < this.Size; ++i) {
+        for (let i = 0; i < size; ++i) {
           const pix = br.ReadWord();
           const extractor = new ChannelExtractor(pix);
           let b = extractor.extract(32);
@@ -591,11 +628,11 @@ export class ALIG extends AL {
           g = convert(g);
           b = convert(b);
           a = Math.floor(a * (255 / 1) + 0.5);
-          this.Image.set([r, g, b, a], i * 4);
+          image.set([r, g, b, a], i * 4);
         }
         break;
       case 'ABG4':
-        for (let i = 0; i < this.Size; ++i) {
+        for (let i = 0; i < size; ++i) {
           const pix = br.ReadWord();
           const extractor = new ChannelExtractor(pix);
           let a = extractor.extract(16);
@@ -606,11 +643,11 @@ export class ALIG extends AL {
           g = Math.floor(g * (255 / 15) + 0.5);
           b = Math.floor(b * (255 / 15) + 0.5);
           a = Math.floor(a * (255 / 15) + 0.5);
-          this.Image.set([r, g, b, a], i * 4);
+          image.set([r, g, b, a], i * 4);
         }
         break;
       case 'BGR4':
-        for (let i = 0; i < this.Size; ++i) {
+        for (let i = 0; i < size; ++i) {
           const pix = br.ReadWord();
           const extractor = new ChannelExtractor(pix);
           let b = extractor.extract(16);
@@ -621,25 +658,26 @@ export class ALIG extends AL {
           g = Math.floor(g * (255 / 1) + 0.5);
           b = Math.floor(b * (255 / 1) + 0.5);
           a = Math.floor(a * (255 / 1) + 0.5);
-          this.Image.set([r, g, b, a], i * 4);
+          image.set([r, g, b, a], i * 4);
         }
         break;
       case 'RGBA':
-        this.Image = br.ReadBytes(4 * this.Size);
-        return;
+        image = br.ReadBytes(4 * size);
+        break;
       case 'BGRA':
-        {
-          const p = br.ReadBytes(4 * this.Size);
-          for (let i = 0; i < p.length; i += 4) {
-            const [a, r, g, b] = p.subarray(i, 4);
-            this.Image.set([r, g, b, a], i * 4);
-          }
+      {
+        const p = br.ReadBytes(4 * size);
+        for (let i = 0; i < p.length; i += 4) {
+          const [a, r, g, b] = p.subarray(i, 4);
+          image.set([r, g, b, a], i * 4);
         }
+      }
         break;
       default:
-        console.log('Unknwon image format: ', this.Form);
+        console.log('Unknwon image format: ', form);
         break;
     }
+    return new ALIG(width, height, image);
   }
 }
 
@@ -649,43 +687,47 @@ export type AlodEntry = {
 };
 
 export class ALOD extends AL {
-  Vers: number;
-  Form: number;
-  Fields: string[];
-  Entries = new Array<AlodEntry>();
-  EntryCount: number;
-  FieldCount: number;
-  Unknown: number;
-  ALMTOffset: number;
-  ALMT?: ALMT;
-  constructor(buffer: Uint8Array) {
-    super(buffer);
+  Entries: AlodEntry[];
+  Almt?: ALMT;
+  constructor(entries: AlodEntry[], almt: ALMT | undefined) {
+    super('ALOD');
+    this.Entries = entries;
+    this.Almt = almt;
+  }
+  static parse(context: ALContext, buffer: Uint8Array, level: number): ALOD {
+    console.log(`${"  ".repeat(level)}- ALOD (AL Object Definition)`);
     const br = new DataViewReader(buffer);
-    this.Head = br.ReadString(4);
-    this.Vers = br.ReadByte();
-    this.Form = br.ReadByte();
-    this.EntryCount = br.ReadByte();
-    this.FieldCount = br.ReadByte();
-    this.Unknown = br.ReadDword();
-    this.ALMTOffset = br.ReadDword();
+    const head = br.ReadString(4);
+    if (head !== 'ALOD') {
+      throw new Error(`Block signature is not as expected: ${head} != ALOD`);
+    }
+
+    const _vers = br.ReadByte();
+    const form = br.ReadByte();
+    const entryCount = br.ReadByte();
+    const fieldCount = br.ReadByte();
+    const _unknown = br.ReadDword();
+    const almtOffset = br.ReadDword();
+    const entries = new Array<AlodEntry>();
+    let almt: ALMT | undefined;
 
     const entryOffsets = new Array<number>();
-    for (let i = 0; i < this.EntryCount; i++) {
+    for (let i = 0; i < entryCount; i++) {
       entryOffsets.push(br.ReadWord());
     }
 
     const fieldOffsets = new Array<number>();
-    for (let i = 0; i < this.FieldCount; i++) {
+    for (let i = 0; i < fieldCount; i++) {
       fieldOffsets.push(br.ReadWord());
     }
 
-    this.Fields = [];
-    for (let i = 0; i < this.FieldCount; i++) {
-      this.Fields.push(br.ReadString());
+    const fields = [];
+    for (let i = 0; i < fieldCount; i++) {
+      fields.push(br.ReadString());
     }
 
     br.Align(4);
-    for (let i = 0; i < this.EntryCount; i++) {
+    for (let i = 0; i < entryCount; i++) {
       br.Align(4);
       br.Seek(entryOffsets[i], Origin.Begin);
       const entry: AlodEntry = {
@@ -693,22 +735,22 @@ export class ALOD extends AL {
         Fields: {},
       };
 
-      const EntryFieldCount = br.ReadDword();
+      const entryFieldCount = br.ReadDword();
 
       const entryFieldOffsets = new Array<number>();
-      for (let j = 0; j < EntryFieldCount; j++) {
+      for (let j = 0; j < entryFieldCount; j++) {
         entryFieldOffsets.push(entryOffsets[i] + br.ReadWord());
       }
 
       const entryFieldIndexes = new Array<number>();
-      for (let j = 0; j < EntryFieldCount; j++) {
+      for (let j = 0; j < entryFieldCount; j++) {
         entryFieldIndexes.push(br.ReadByte());
       }
 
       br.Align(2);
 
-      for (let j = 0; j < EntryFieldCount; j++) {
-        const field = this.Fields[entryFieldIndexes[j]];
+      for (let j = 0; j < entryFieldCount; j++) {
+        const field = fields[entryFieldIndexes[j]];
         br.Seek(entryFieldOffsets[j], Origin.Begin);
         switch (field) {
           case 'Texture0ID':
@@ -755,10 +797,11 @@ export class ALOD extends AL {
             console.log(`Field not recognized: ${field}`);
         }
       }
-      this.Entries.push(entry);
-      if (this.Form === 2)
-        this.ALMT = new ALMT(this.Buffer.slice(this.ALMTOffset));
+      entries.push(entry);
+      if (form === 2)
+        almt = ALMT.parse(context, buffer.slice(almtOffset), level + 1);
     }
+    return new ALOD(entries, almt);
   }
 }
 
@@ -775,41 +818,39 @@ export type AlmtField = {
 };
 
 export class ALMT extends AL {
-  Vers: number;
-  Unknown1: number;
-  EntryCount: number;
-  FieldCount: number;
-  Unknown2: number;
-  Unknown3: number;
-  DataOffset: number;
-  Entries = new Array<AlmtEntry>();
-  Fields = new Array<AlmtField>();
-  Pattern: number;
-  Length: number;
-  Rate: number;
-  Flag1: number;
-  Unknown4: number;
-  EntryOffset?: number;
-  constructor(buffer: Uint8Array) {
-    super(buffer);
-    this.Buffer = buffer;
+  Entries: AlmtEntry[];
+  Fields: AlmtField[];
+  constructor(fields: AlmtField[], entries: AlmtEntry[]) {
+    super('ALMT');
+    this.Fields = fields;
+    this.Entries = entries;
+  }
+  static parse(context: ALContext, buffer: Uint8Array, level: number): ALMT {
+    console.log(`${"  ".repeat(level)}- ALMT (AL Motion)`);
     const br = new DataViewReader(buffer);
-    this.Head = br.ReadString(4);
-    this.Vers = br.ReadByte();
-    this.Unknown1 = br.ReadByte();
-    this.EntryCount = br.ReadWord();
-    this.FieldCount = br.ReadByte();
-    this.Unknown2 = br.ReadByte();
-    this.Unknown3 = br.ReadWord();
-
-    for (let i = 0; i < this.EntryCount; i++) {
-      this.Entries.push({ Name: br.ReadString(4), Fields: {} });
+    const head = br.ReadString(4);
+    if (head !== 'ALMT') {
+      throw new Error(`Block signature is not as expected: ${head} != ALMT`);
     }
 
-    this.DataOffset = br.ReadDword();
+    const _vers = br.ReadByte();
+    const _unknown1 = br.ReadByte();
+    const entryCount = br.ReadWord();
+    const fieldCount = br.ReadByte();
+    const _unknown2 = br.ReadByte();
+    const _unknown3 = br.ReadWord();
 
-    for (let i = 0; i < this.FieldCount; i++) {
-      this.Fields.push({
+    const entries = new Array<AlmtEntry>();
+    const fields = new Array<AlmtField>();
+
+    for (let i = 0; i < entryCount; i++) {
+      entries.push({ Name: br.ReadString(4), Fields: {} });
+    }
+
+    const _dataOffset = br.ReadDword();
+
+    for (let i = 0; i < fieldCount; i++) {
+      fields.push({
         Offset: br.ReadWord(),
         Id1: 0,
         Id2: 0,
@@ -817,8 +858,8 @@ export class ALMT extends AL {
       });
     }
 
-    for (let i = 0; i < this.FieldCount; i++) {
-      const field = this.Fields[i];
+    for (let i = 0; i < fieldCount; i++) {
+      const field = fields[i];
       field.Id1 = br.ReadByte();
       field.Id2 = br.ReadByte();
       field.Name = br.ReadString();
@@ -826,17 +867,18 @@ export class ALMT extends AL {
 
     br.Align(4);
 
-    this.Pattern = br.ReadDword();
-    this.Length = br.ReadWord();
-    this.Rate = br.ReadByte();
-    this.Flag1 = br.ReadByte();
-    this.Unknown4 = br.ReadWord();
+    const _pattern = br.ReadDword();
+    const _length = br.ReadWord();
+    const _rate = br.ReadByte();
+    const _flag1 = br.ReadByte();
+    const unknown4 = br.ReadWord();
+    let _entryOffset: number | undefined;
 
-    for (let i = 0; i < (this.Unknown4 - 0x002a) / 2; i++) {
-      this.EntryOffset = br.ReadWord();
+    for (let i = 0; i < (unknown4 - 0x002a) / 2; i++) {
+      _entryOffset = br.ReadWord();
     }
 
-    for (const entry of this.Entries) {
+    for (const entry of entries) {
       const fieldOffsetBase = br.Position;
       const fieldCountNonstream = br.ReadByte();
       const fieldCount = br.ReadByte();
@@ -853,7 +895,7 @@ export class ALMT extends AL {
       }
 
       fieldDescs.forEach((fieldDesc, idx) => {
-        const field = this.Fields[fieldDesc & 0x0f];
+        const field = fields[fieldDesc & 0x0f];
         const stream = new Array<{
           Time?: number;
           Data: unknown;
@@ -881,8 +923,9 @@ export class ALMT extends AL {
         entry[field.Name] = stream;
       });
     }
+    return new ALMT(fields, entries);
   }
-  private parseField(name: string, br: DataViewReader): unknown {
+  private static parseField(name: string, br: DataViewReader): unknown {
     switch (name) {
       case 'PatternNo':
       case 'BlendMode':
@@ -937,36 +980,36 @@ const AlTypeMap = new Map<string, string>([
   ['ALLZ', 'AL Compress'],
 ]);
 
-function parseObject(context: ALContext, buffer: Uint8Array): AL {
+function parseObject(context: ALContext, buffer: Uint8Array, level = 0): AL {
   const type = decoder.decode(buffer.slice(0, 4));
   switch (type) {
     case 'ALLZ': {
-      const lz = new ALLZ(buffer);
-      return parseObject(context, lz.Dst);
+      const lz = ALLZ.parse(context, buffer, level);
+      return parseObject(context, lz.Dst, level + 1);
     }
     case 'ALL4': {
-      const l4 = new ALL4(context, buffer);
-      return parseObject(context, l4.Dst);
+      const l4 = ALL4.parse(context, buffer, level);
+      return parseObject(context, l4.Dst, level + 1);
     }
     case 'ALTB':
-      return new ALTB(buffer);
+      return ALTB.parse(context, buffer, level);
     case 'ALAR':
-      return new ALAR(buffer);
+      return ALAR.parse(context, buffer, level);
     case 'ALTX':
-      return new ALTX(buffer);
+      return ALTX.parse(context, buffer, level);
     case 'ALIG':
-      return new ALIG(buffer);
+      return ALIG.parse(context, buffer, level);
     case 'ALOD':
-      return new ALOD(buffer);
+      return ALOD.parse(context, buffer, level);
     case 'ALRD':
-      return new ALRD(buffer);
+      return ALRD.parse(context, buffer, level);
     default:
       console.log(
         `Not Support type ${type}${
           AlTypeMap.has(type) ? ` ${AlTypeMap.get(type)}` : ''
         }`,
       );
-      return new DefaultAL(buffer);
+      return DefaultAL.parse(context, buffer, level);
   }
 }
 
