@@ -2,7 +2,7 @@
 import {onMounted, PropType, ref, toRefs, watch} from "vue";
 import {ALIG, ALTX, AltxFrame} from "../aigis-fuel/AL";
 import CanvasComponent from "./CanvasComponent.vue";
-import DrumSelector from "./ArraySelector.vue";
+import ArraySelector from "./ArraySelector.vue";
 
 const props = defineProps({
   name: String,
@@ -95,7 +95,7 @@ onMounted(() => {
     <div><canvas ref="canvasRef" /></div>
     <div v-if="data instanceof ALTX && Object.keys(data.Sprites).length >= 2">
       <div>
-        <DrumSelector :array="Object.keys(data.Sprites)" @update="item => spriteKey = item" />
+        <ArraySelector :array="Object.keys(data.Sprites)" @update="item => spriteKey = item" />
       </div>
       <span>Frame name: [{{frameName}}]</span>
       <div>
