@@ -44,7 +44,7 @@ export class ALL4 extends AL {
     this.Dst = dst;
   }
   static parse(context: ALContext, buffer: Uint8Array, level: number): ALL4 {
-    console.log(`${"  ".repeat(level)}- ALL4 (AL LZ4 Compress)`);
+    console.log(`${"  ".repeat(level)}- ALL4 (AL Compress)`);
     const head = decoder.decode(buffer.slice(0, 4));
     if (head !== 'ALL4') {
       throw new Error(`Block signature is not as expected: ${head} != ALL4`);
@@ -63,7 +63,7 @@ export class ALLZ extends AL {
   }
 
   static parse(context: ALContext, buffer: Uint8Array, level: number): ALLZ {
-    console.log(`${"  ".repeat(level)}- ALLZ (AL LZMA Compress)`);
+    console.log(`${"  ".repeat(level)}- ALLZ (AL Compress)`);
     const br = new DataViewReader(buffer);
 
     const head = br.ReadString(4);
